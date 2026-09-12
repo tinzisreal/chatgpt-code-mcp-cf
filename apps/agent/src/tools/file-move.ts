@@ -1,4 +1,4 @@
-import { mkdir, rename, access, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdir, rename, access, copyFile, rm } from "node:fs/promises";
 import path from "node:path";
 import type { FileMoveParams, FileMoveResult } from "@chatgpt-code-mcp/protocol";
 import { resolveSafePath } from "../sandbox.js";
@@ -35,8 +35,8 @@ export async function fileMove(
     // rename() can't cross drives/devices (EXDEV) — e.g. moving from a C:\
     // workspace to a D:\ workspace. Fall back to a binary-safe copy+delete.
     if ((err as NodeJS.ErrnoException).code !== "EXDEV") throw err;
-    const data = await readFile(fromAbs);
-    await writeFile(toAbs, data);
+    // Streaming copy+delete — doesn't slurp a large file into memory.
+    await copyFile(fromAbs, toAbs);
     await rm(fromAbs);
   }
 

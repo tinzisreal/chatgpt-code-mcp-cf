@@ -3,7 +3,15 @@ import type { TerminalExecParams, TerminalExecResult } from "@chatgpt-code-mcp/p
 import { resolveSafePath, WHOLE_MACHINE_ROOT } from "../sandbox.js";
 import { resolveWorkspace, type ToolContext } from "./context.js";
 import { runShellCommand } from "../lib/exec.js";
+import { RpcError } from "../rpc-error.js";
 import type { z } from "zod";
+
+/** Kill switch: set TERMINAL_EXEC_DISABLED=1 in the agent's environment to
+ * refuse every terminal_exec call without restarting or re-pairing. */
+function terminalExecDisabled(): boolean {
+  const v = process.env.TERMINAL_EXEC_DISABLED;
+  return v === "1" || v === "true";
+}
 
 /**
  * HIGH RISK: executes an arbitrary shell command on the real host OS.
@@ -20,6 +28,13 @@ export async function terminalExec(
   ctx: ToolContext,
   params: z.infer<typeof TerminalExecParams>,
 ): Promise<z.infer<typeof TerminalExecResult>> {
+  if (terminalExecDisabled()) {
+    throw new RpcError(
+      "PATH_NOT_ALLOWED",
+      "terminal_exec is disabled on this machine (TERMINAL_EXEC_DISABLED is set).",
+    );
+  }
+
   const ws = resolveWorkspace(ctx, params.workspace);
 
   let cwd: string;
@@ -32,6 +47,12 @@ export async function terminalExec(
   } else {
     cwd = ws.root;
   }
+
+  // Audit: terminal_exec bypasses every path/command guard, so every
+  // invocation is logged for the machine operator to review.
+  console.warn(
+    `[audit] terminal_exec workspace=${params.workspace} cwd=${cwd} command=${JSON.stringify(params.command)}`,
+  );
 
   return runShellCommand(params.command, cwd, params.timeoutMs);
 }

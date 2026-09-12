@@ -7,6 +7,11 @@ import { RpcError } from "../rpc-error.js";
 import type { ToolContext } from "../tools/context.js";
 
 const MAX_BACKOFF_MS = 30_000;
+// Liveness: a NAT/idle drop can leave the socket half-open with no `close`
+// event, so the agent would sit "connected" to a dead pipe and silently
+// black-hole dispatches. Ping periodically and force-reconnect on missed pongs.
+const PING_INTERVAL_MS = 20_000;
+const LIVENESS_TIMEOUT_MS = 60_000;
 
 async function reportWorkspaces(gatewayUrl: string, agentToken: string, ctx: ToolContext) {
   const workspaces = [...ctx.workspaces.values()].map((w) => ({ name: w.name, root: w.root }));
@@ -26,9 +31,39 @@ function connect(gatewayUrl: string, agentToken: string, ctx: ToolContext, backo
   const wsUrl = `${gatewayUrl.replace(/^http/, "ws")}/agent/connect`;
   const socket = new WebSocket(wsUrl, { headers: { authorization: `Bearer ${agentToken}` } });
 
+  let lastPongAt = Date.now();
+  let pingTimer: ReturnType<typeof setInterval> | undefined;
+  let livenessTimer: ReturnType<typeof setInterval> | undefined;
+  const stopTimers = () => {
+    if (pingTimer) clearInterval(pingTimer);
+    if (livenessTimer) clearInterval(livenessTimer);
+    pingTimer = undefined;
+    livenessTimer = undefined;
+  };
+
   socket.on("open", () => {
     console.log(`[code-agent] connected to ${gatewayUrl}`);
     backoffMs = 1000;
+    lastPongAt = Date.now();
+    pingTimer = setInterval(() => {
+      if (socket.readyState === WebSocket.OPEN) {
+        try {
+          socket.ping();
+        } catch {
+          /* terminate handled by the liveness timer */
+        }
+      }
+    }, PING_INTERVAL_MS);
+    livenessTimer = setInterval(() => {
+      if (Date.now() - lastPongAt > LIVENESS_TIMEOUT_MS) {
+        console.warn("[code-agent] no pong within liveness timeout — reconnecting");
+        socket.terminate(); // forces a 'close' event → reconnect
+      }
+    }, PING_INTERVAL_MS);
+  });
+
+  socket.on("pong", () => {
+    lastPongAt = Date.now();
   });
 
   socket.on("message", async (data) => {
@@ -64,6 +99,7 @@ function connect(gatewayUrl: string, agentToken: string, ctx: ToolContext, backo
     setTimeout(() => connect(gatewayUrl, agentToken, ctx, next), backoffMs);
   };
   socket.on("close", (code, reasonBuf) => {
+    stopTimers();
     const reason = reasonBuf.toString() || "(no reason)";
     console.log(`[code-agent] disconnected: code=${code} reason=${reason}, reconnecting in ${backoffMs}ms`);
     reconnect();

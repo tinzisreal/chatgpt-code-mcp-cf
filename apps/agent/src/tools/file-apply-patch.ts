@@ -13,9 +13,12 @@ export async function fileApplyPatch(
   const ws = resolveWorkspace(ctx, params.workspace);
   const abs = resolveSafePath(ws.root, params.path, ws.config);
 
-  let current: string;
+  let current: Buffer;
   try {
-    current = await readFile(abs, "utf8");
+    // Read as a Buffer and hash the bytes — file_read hashes the raw buffer,
+    // so hashing a utf8-decoded string here would mismatch for content that
+    // doesn't round-trip (BOM, non-UTF-8 bytes) and reject unchanged files.
+    current = await readFile(abs);
   } catch {
     throw new RpcError("NOT_FOUND", `file does not exist: ${params.path}`);
   }

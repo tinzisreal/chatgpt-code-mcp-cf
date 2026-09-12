@@ -2,12 +2,12 @@ name = "chatgpt-code-mcp"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
-account_id = "1d67f5654d4bc36a21b6cb227e40618b"
+account_id = "bef3822bdf4b0e9a23e27d5de2705c30"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "chatgpt-code-mcp"
-database_id = "6045017c-50c5-4e6f-9f81-762f6889b855"
+database_id = "267a6d28-ed51-46af-91ef-179bbac67652"
 
 [[durable_objects.bindings]]
 name = "MACHINE_SESSIONS"
@@ -20,4 +20,4 @@ new_sqlite_classes = ["MachineSession"]
 [vars]
 # GATEWAY_BASE_URL is set per-environment; OWNER_SECRET must be set via
 # `wrangler secret put OWNER_SECRET` — never committed here.
-GATEWAY_BASE_URL = "https://chatgpt-code-mcp.tuanhai362005t.workers.dev"
+GATEWAY_BASE_URL = "https://chatgpt-code-mcp.huutug7.workers.dev"

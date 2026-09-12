@@ -23,6 +23,21 @@ function fail(message: string): McpToolContent {
   return { content: [{ type: "text", text: message }], isError: true };
 }
 
+/**
+ * How long the Gateway waits for the agent to answer, per tool. Must exceed
+ * the agent-side execution timeout, otherwise a long build/test/command
+ * returns TIMEOUT to ChatGPT at the DO's 30s default while it keeps running on
+ * the host (side effects happen, reply is dropped). Margin added for overhead.
+ */
+function dispatchTimeoutFor(name: ToolName, params: unknown): number | undefined {
+  if (name === "terminal_exec") {
+    const requested = (params as { timeoutMs?: number }).timeoutMs ?? 120_000;
+    return requested + 15_000;
+  }
+  if (name === "test_run") return 195_000; // agent test default 120s + headroom
+  return undefined; // quick file/git ops: DO's 30s default is plenty
+}
+
 /** Every tool except machines_list/workspaces_list follows the same shape:
  * validate params, forward to the agent over the relay, map the RPC result. */
 function relayTool(name: Exclude<ToolName, "machines_list" | "workspaces_list">, description: string): ToolDef {
@@ -35,7 +50,7 @@ function relayTool(name: Exclude<ToolName, "machines_list" | "workspaces_list">,
       if (!parsed.success) return fail(`invalid_params: ${parsed.error.message}`);
 
       const machineId = (parsed.data as { machineId: string }).machineId;
-      const res = await dispatchToMachine(env, machineId, name, parsed.data);
+      const res = await dispatchToMachine(env, machineId, name, parsed.data, dispatchTimeoutFor(name, parsed.data));
       if (!res.ok) return fail(`${res.error.code}: ${res.error.message}`);
       return ok(res.result);
     },

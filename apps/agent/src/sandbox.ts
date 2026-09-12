@@ -1,7 +1,33 @@
+import fs from "node:fs";
 import path from "node:path";
 import picomatch from "picomatch";
 import { RpcError } from "./rpc-error.js";
 import type { CodeAgentConfig } from "./workspace-config.js";
+
+/**
+ * Resolve symlinks on the longest existing prefix of `abs` (the target itself
+ * may not exist yet, e.g. for file_create). Returns the fully symlink-resolved
+ * absolute path. This is what defeats a symlink-escape: a link inside the
+ * workspace that points outside it resolves to its real out-of-root target,
+ * which the caller then re-checks against the root and the block/allow lists.
+ */
+function realpathResolved(abs: string): string {
+  let existing = abs;
+  const tail: string[] = [];
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) break; // reached the filesystem root
+    tail.unshift(path.basename(existing));
+    existing = parent;
+  }
+  let real: string;
+  try {
+    real = fs.realpathSync.native(existing);
+  } catch {
+    real = path.resolve(existing);
+  }
+  return tail.length > 0 ? path.join(real, ...tail) : real;
+}
 
 /** Sentinel `root` value marking the synthetic "computer" workspace — not
  * anchored to any single directory (Windows has no common ancestor of
@@ -40,7 +66,9 @@ export function resolveSafePath(
         `workspace "computer" requires an absolute path with drive letter (e.g. "C:\\Users\\...\\file.txt"), got: ${relPath}`,
       );
     }
-    const abs = path.resolve(relPath);
+    // Resolve symlinks so blockedPaths match the REAL target, not an
+    // innocuously-named link pointing at (e.g.) ~/.ssh.
+    const abs = realpathResolved(path.resolve(relPath));
     // picomatch treats "/" as the path separator by default — normalize the
     // Windows backslash-separated absolute path before matching, same as
     // the per-workspace branch below already does for relFromRoot.
@@ -49,17 +77,35 @@ export function resolveSafePath(
   }
 
   const normalizedRel = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
-  const rootResolved = path.resolve(workspaceRoot);
-  const abs = path.resolve(rootResolved, normalizedRel);
+  const rootResolved = fs.realpathSync.native(path.resolve(workspaceRoot));
+  // Resolve symlinks BEFORE the traversal check: a link inside the root that
+  // points outside must be rejected, not silently followed.
+  const abs = realpathResolved(path.resolve(rootResolved, normalizedRel));
   const relFromRoot = path.relative(rootResolved, abs).replace(/\\/g, "/");
 
   if (relFromRoot.startsWith("..") || path.isAbsolute(relFromRoot)) {
-    throw new RpcError("PATH_NOT_ALLOWED", `path escapes workspace root: ${relPath}`);
+    throw new RpcError("PATH_NOT_ALLOWED", `path escapes workspace root (symlink or traversal): ${relPath}`);
   }
 
   const check = relFromRoot === "" ? "." : relFromRoot;
   checkPatterns(check, config, requireAllowed);
   return abs;
+}
+
+/**
+ * Non-throwing sandbox check for a workspace-relative path, used by code_search
+ * to filter ripgrep matches. Returns true only if the path is not blocked and
+ * (when required) is within allowedPaths.
+ */
+export function isRelPathAllowed(
+  relFromRoot: string,
+  config: CodeAgentConfig,
+  requireAllowed = true,
+): boolean {
+  const check = relFromRoot.replace(/\\/g, "/") || ".";
+  if (config.blockedPaths.some((p) => picomatch.isMatch(check, p, { dot: true }))) return false;
+  if (requireAllowed && !config.allowedPaths.some((p) => picomatch.isMatch(check, p, { dot: true }))) return false;
+  return true;
 }
 
 function checkPatterns(check: string, config: CodeAgentConfig, requireAllowed: boolean): void {
