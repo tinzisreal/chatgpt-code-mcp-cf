@@ -6,3 +6,8 @@ dist/
 .env.*
 !.env.example
 .dev.vars
+
+# runtime logs
+*.log
+*.log.err
+agent.log
